@@ -1,0 +1,6 @@
+/target/
+/.nb-gradle/
+/nbproject/private/
+build/
+.mtj.tmp/
+*.class
