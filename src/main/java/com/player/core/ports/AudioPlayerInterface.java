@@ -7,4 +7,5 @@ public interface AudioPlayerInterface {
     void stop();
     void setSpeed(double speed);
     void setVolume(float volumen);
+    void seek(double porcentaje);
 }

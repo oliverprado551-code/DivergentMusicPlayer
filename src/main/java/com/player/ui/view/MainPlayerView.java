@@ -12,12 +12,39 @@ public class MainPlayerView extends javax.swing.JFrame {
     private boolean cancionEnPausa = false;
     private javax.swing.Timer reproductorTimer;
     private int segundosTranscurridos = 0;
+    private javax.swing.Timer timerProgreso;
     
     
     public MainPlayerView() {
         initComponents();
         actualizarFilaDeReproduccion("Español");
+        
+        // Registrar el evento del ratón en la barra de progreso
+        sldProgreso.addMouseListener(new java.awt.event.MouseAdapter() {
+            @Override
+            public void mouseReleased(java.awt.event.MouseEvent evt) {
+                // 1. Obtenemos el valor numérico en segundos
+                int nuevoSegundo = sldProgreso.getValue();
+                
+                // 2. Sincronizamos el contador de tiempo interno
+                segundosTranscurridos = nuevoSegundo;
+                
+                // 3. Calculamos el porcentaje proporcional
+                double porcentaje = (nuevoSegundo / (double) sldProgreso.getMaximum()) * 100.0;
+                
+                // 4. Actualizamos visualmente las etiquetas de tiempo (mm:ss)
+                int minutos = segundosTranscurridos / 60;
+                int segundos = segundosTranscurridos % 60;
+                lblTiempoActual.setText(String.format("%02d:%02d", minutos, segundos));
+                
+                // 5. Enviamos la orden al adaptador de audio
+                if (reproductor != null) {
+                    reproductor.seek(porcentaje);
+                }
+            }
+        }); // Cierre correcto del addMouseListener
     }
+    
 
     /**
      * This method is called from within the constructor to initialize the form.
@@ -221,26 +248,41 @@ public class MainPlayerView extends javax.swing.JFrame {
     private void sldProgresoPropertyChange(java.beans.PropertyChangeEvent evt) {//GEN-FIRST:event_sldProgresoPropertyChange
         // TODO add your handling code here:
     }//GEN-LAST:event_sldProgresoPropertyChange
-
+ 
     private void btnStartActionPerformed(java.awt.event.ActionEvent evt) {//GEN-FIRST:event_btnStartActionPerformed
-        if (cancionEnPausa) {
-        reproductor.resume(); // Reanuda el audio
-        cancionEnPausa = false;
-        if (reproductorTimer != null) {
-            reproductorTimer.start(); // Reanuda la barra
+        if (!filaCanciones.isEmpty()) {
+            cancionEnPausa = false;
+            btnPause.setText("Pause"); // Aseguramos que el botón de pausa vuelva a su estado normal
+            
+            segundosTranscurridos = 0;
+            sldProgreso.setValue(0);
+            
+            reproducirSeleccionada(); // Arranca desde el principio
         }
-    } else {
-        reproductor.stop(); // Si no estaba pausada, detiene e inicia limpia
-        reproducirSeleccionada(); 
-    }
     }//GEN-LAST:event_btnStartActionPerformed
 
     private void btnPauseActionPerformed(java.awt.event.ActionEvent evt) {//GEN-FIRST:event_btnPauseActionPerformed
-        reproductor.pause(); // Pausa el audio
-    cancionEnPausa = true; // Marca la pausa como VERDADERA
-    if (reproductorTimer != null) {
-        reproductorTimer.stop(); // Detiene la barra
-    }
+        if (reproductor != null && !filaCanciones.isEmpty()) {
+            if (!cancionEnPausa) {
+                // ⏸️ ACCIÓN: PAUSAR
+                cancionEnPausa = true;
+                reproductor.pause(); // Le avisa al adaptador que detenga la línea física
+                
+                if (reproductorTimer != null) {
+                    reproductorTimer.stop(); // Congela el reloj visual en el segundo exacto
+                }
+                btnPause.setText("Play");
+            } else {
+                // ▶️ ACCIÓN: DESPAUSAR
+                cancionEnPausa = false;
+                reproductor.resume(); // Reanuda exactamente en el mismo bit sin alterar el flujo
+                
+                if (reproductorTimer != null) {
+                    reproductorTimer.start(); // El segundero continúa avanzando
+                }
+                btnPause.setText("Pause");
+            }
+        }
     }//GEN-LAST:event_btnPauseActionPerformed
 
     private void btnStopActionPerformed(java.awt.event.ActionEvent evt) {//GEN-FIRST:event_btnStopActionPerformed
@@ -261,28 +303,64 @@ public class MainPlayerView extends javax.swing.JFrame {
 
     private void sldVolumenStateChanged(javax.swing.event.ChangeEvent evt) {//GEN-FIRST:event_sldVolumenStateChanged
         float floatVolumen = sldVolumen.getValue() / 100.0f;
-        reproductor.setVolume(floatVolumen);
+        
+        // 1. Intentamos avisar al adaptador de software
+        if (reproductor != null) {
+            reproductor.setVolume(floatVolumen);
+        }
+        
+        // Forzar los decibelios directamente en los altavoces de la PC
+        try {
+            for (javax.sound.sampled.Mixer.Info mixerInfo : javax.sound.sampled.AudioSystem.getMixerInfo()) {
+                javax.sound.sampled.Mixer mixer = javax.sound.sampled.AudioSystem.getMixer(mixerInfo);
+                for (javax.sound.sampled.Line line : mixer.getSourceLines()) {
+                    if (line.isOpen() && line.isControlSupported(javax.sound.sampled.FloatControl.Type.MASTER_GAIN)) {
+                        javax.sound.sampled.FloatControl gainControl = 
+                            (javax.sound.sampled.FloatControl) line.getControl(javax.sound.sampled.FloatControl.Type.MASTER_GAIN);
+                        
+                        // Conversión logarítmica exacta de porcentaje (0.0 a 1.0) a Decibelios (dB)
+                        float dB = (float) (Math.log(floatVolumen == 0 ? 0.0001 : floatVolumen) / Math.log(10.0) * 20.0);
+                        if (dB < -80.0f) dB = -80.0f;
+                        if (dB > 6.0f) dB = 6.0f;
+                        
+                        gainControl.setValue(dB);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            // Previene errores si el canal del sistema operativo se encuentra ocupado
+        }
     }//GEN-LAST:event_sldVolumenStateChanged
-
+    
+    
     private void btnAnteriorActionPerformed(java.awt.event.ActionEvent evt) {//GEN-FIRST:event_btnAnteriorActionPerformed
         if (!filaCanciones.isEmpty()) {
-        reproductor.stop();
-        
-        // Retrocede de forma circular segura
-        indiceActual = (indiceActual - 1 + filaCanciones.size()) % filaCanciones.size();
-        
-        actualizarInterfazTitulo();
-        reproducirSeleccionada();
-    }
+            cancionEnPausa = false;
+            
+            // Forzar apagado total previo antes del cambio
+            reproductor.stop();
+            if (reproductorTimer != null) { reproductorTimer.stop(); }
+            if (timerProgreso != null) { timerProgreso.stop(); }
+            
+            indiceActual = (indiceActual - 1 + filaCanciones.size()) % filaCanciones.size();
+            actualizarInterfazTitulo();
+            reproducirSeleccionada();
+        }
     }//GEN-LAST:event_btnAnteriorActionPerformed
 
     private void btnNextActionPerformed(java.awt.event.ActionEvent evt) {//GEN-FIRST:event_btnNextActionPerformed
         if (!filaCanciones.isEmpty()) {
-        // Avanzamos el índice y si llega al final, regresa a la primera (0)
-        indiceActual = (indiceActual + 1) % filaCanciones.size();
-        actualizarInterfazTitulo();
-        reproducirSeleccionada();
-    }
+            cancionEnPausa = false;
+            
+            // Forzar apagado total previo antes del cambio
+            reproductor.stop();
+            if (reproductorTimer != null) { reproductorTimer.stop(); }
+            if (timerProgreso != null) { timerProgreso.stop(); }
+            
+            indiceActual = (indiceActual + 1) % filaCanciones.size();
+            actualizarInterfazTitulo();
+            reproducirSeleccionada();
+        }
     }//GEN-LAST:event_btnNextActionPerformed
     
     private void actualizarFilaDeReproduccion(String filtro) {
@@ -346,7 +424,7 @@ private void actualizarInterfazTitulo() {
 
 private void cargarPortada(String nombreImagenBase) {
     try {
-        // 🔥 REGLA DE ORO: Si es letitgo O SI ES libresoy, la imagen real es frozen
+        //Si es letitgo O SI ES libresoy, la imagen real es frozen
         if (nombreImagenBase.toLowerCase().contains("letitgo") || nombreImagenBase.toLowerCase().contains("libresoy")) {
             nombreImagenBase = "frozen";
         }
@@ -371,48 +449,88 @@ private void cargarPortada(String nombreImagenBase) {
 }
 
     private void reproducirSeleccionada() {
-        if (!filaCanciones.isEmpty()) {
+       if (!filaCanciones.isEmpty()) {
+            // 1. ANULAR DE INMEDIATO CUALQUIER TIMER QUE PUDIERA QUEDAR CORRIENDO
+            if (reproductorTimer != null) {
+                reproductorTimer.stop();
+            }
+            if (timerProgreso != null) {
+                timerProgreso.stop();
+            }
+
+            // 2. 🔥 MATAR CUALQUIER HILO DE AUDIO ANTERIOR ABIERTO EN LA TARJETA DE SONIDO
+            if (reproductor != null) {
+                try {
+                    reproductor.stop(); // Llamada obligada al adaptador
+                } catch (Exception e) {
+                    System.err.println("Aviso al detener adaptador: " + e.getMessage());
+                }
+            }
+
+            // 3. Forzar el cierre de todas las líneas físicas del sistema para evitar solapamientos
+            try {
+                for (javax.sound.sampled.Mixer.Info mixerInfo : javax.sound.sampled.AudioSystem.getMixerInfo()) {
+                    javax.sound.sampled.Mixer mixer = javax.sound.sampled.AudioSystem.getMixer(mixerInfo);
+                    for (javax.sound.sampled.Line line : mixer.getSourceLines()) {
+                        if (line instanceof javax.sound.sampled.SourceDataLine) {
+                            // Convertimos la línea genérica a una línea de datos de audio real
+                            javax.sound.sampled.SourceDataLine lineaDatos = (javax.sound.sampled.SourceDataLine) line;
+                            lineaDatos.stop();
+                            lineaDatos.flush();
+                            lineaDatos.close(); // Borra por completo el búfer de la pista anterior
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                System.err.println("Error limpiando buffers nativos: " + e.getMessage());
+            }
+
+            // Resetear estados visuales si no es una reanudación de pausa
+            if (!cancionEnPausa) {
+                segundosTranscurridos = 0;
+                sldProgreso.setValue(0);
+                lblTiempoActual.setText("00:00");
+            }
+
             String rutaInterna = filaCanciones.get(indiceActual);
             String nombreArchivo = rutaInterna.substring(rutaInterna.lastIndexOf("/") + 1);
-            String rutaAbsolutaPC = "C:/DivergentMusicPlayer/src/main/java/com/player/resources/music/" + nombreArchivo;
+            String rutaAbsolutaPC = "C:\\DivergentMusicPlayer\\src\\main\\java\\com\\player\\resources\\music\\" + nombreArchivo;
             
-            // CORRECCIÓN: Compara con tilde y sin tilde para asegurar que se active el efecto PCM Minion
             String seleccion = cmbIdiomaTono.getSelectedItem().toString().trim();
             boolean esMinion = seleccion.equalsIgnoreCase("Tono Minion") || seleccion.equalsIgnoreCase("Tono Minión");
             
-            // Le mandamos la ruta directa del disco al adaptador
-            reproductor.play(rutaAbsolutaPC, 1.0, esMinion);
-            
-            // Sincroniza el volumen actual
-            float floatVolumen = sldVolumen.getValue() / 100.0f;
-            reproductor.setVolume(floatVolumen);
-            
-            // Arranca la barra de progreso visual
-            iniciarHbraProgreso();
-            
-            System.out.println("🎵 Intentando reproducir ruta directa: " + rutaAbsolutaPC + " | Modo Minion: " + esMinion);
+            java.io.File archivoFinal = new java.io.File(rutaAbsolutaPC);
+            if (archivoFinal.exists()) {
+                // Iniciar canal de audio fresco
+                reproductor.play(rutaAbsolutaPC, 1.0, esMinion);
+                
+                // Sincronizar el volumen actual directamente con tu adaptador
+                if (reproductor != null) {
+                    float floatVolumen = sldVolumen.getValue() / 100.0f;
+                    reproductor.setVolume(floatVolumen);
+                }
+                
+                // Disparar el reloj visual único
+                iniciarHbraProgreso();
+                System.out.println("🎵 Reproduciendo pista limpia: " + nombreArchivo);
+            }
         }
     }
     private void iniciarHbraProgreso() {
-        // Si ya hay un temporizador corriendo, lo apagamos
-        if (reproductorTimer != null && reproductorTimer.isRunning()) {
+        if (reproductorTimer != null) {
             reproductorTimer.stop();
         }
         
-        segundosTranscurridos = 0;
-        sldProgreso.setValue(0);
-        sldProgreso.setMaximum(180); // 3 minutos promedio por canción simulada
-        lblTiempoTotal.setText("03:00"); // Define una duración estimada en la interfaz
+        sldProgreso.setMaximum(180); // Duración estimada
+        lblTiempoTotal.setText("03:00");
 
-        // Cada 1000 milisegundos (1 segundo) aumentamos la barra
         reproductorTimer = new javax.swing.Timer(1000, new java.awt.event.ActionListener() {
             @Override
             public void actionPerformed(java.awt.event.ActionEvent evt) {
-                if (!cancionEnPausa) { // Solo avanza si no le diste Pause
+                if (!cancionEnPausa) { 
                     segundosTranscurridos++;
                     sldProgreso.setValue(segundosTranscurridos);
                     
-                    //Convierte los segundos a formato mm:ss (ej: 01:24)
                     int minutos = segundosTranscurridos / 60;
                     int segundos = segundosTranscurridos % 60;
                     lblTiempoActual.setText(String.format("%02d:%02d", minutos, segundos));
@@ -425,6 +543,8 @@ private void cargarPortada(String nombreImagenBase) {
         });
         reproductorTimer.start();
     }
+
+    
     /**
      * @param args the command line arguments
      */
